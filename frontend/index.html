@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>A2A Explainable Stock Analytics Platform</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif;max-width:900px;margin:32px auto;padding:0 16px}
+    .card{border:1px solid #e5e7eb;border-radius:14px;padding:16px;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    label{font-weight:600;margin-top:10px;display:block}
+    input,select,textarea,button{font:inherit}
+    input,select,textarea{width:100%;padding:10px;border:1px solid #d1d5db;border-radius:10px}
+    button{padding:10px 14px;border-radius:10px;border:1px solid #1f2937;background:#111827;color:#fff;cursor:pointer}
+    button[disabled]{opacity:.6;cursor:not-allowed}
+    .muted{color:#6b7280}
+    .ok{color:#059669}
+    .err{color:#b91c1c}
+    .link{word-break:break-all}
+    .spinner{display:inline-block;width:16px;height:16px;border:2px solid #d1d5db;border-top-color:#111827;border-radius:50%;animation:spin .7s linear infinite;vertical-align:middle;margin-right:6px}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+  <h1>A2A Explainable Stock Analytics Platform</h1>
+  <p class="muted">AI-powered stock analytics platform with forecasting, explainability, evaluation, and risk insights</p>
+
+  <div class="card">
+    <label for="prompt">What Do You Want to Analyze?</label>
+    <textarea id="prompt" rows="4">Analyze AAPL for the last 5 years and forecast the next 7 days. Include evaluation, explainability, risk, and produce an HTML report.</textarea>
+
+    <div class="row">
+      <div style="flex:1">
+        <label for="tickers">Tickers</label>
+        <input id="tickers" placeholder="Type your Ticker"/>
+      </div>
+      <div style="width:160px">
+        <label for="forecast">Forecast days</label>
+        <select id="forecast">
+          <option value="3">3</option>
+          <option value="5">5</option>
+          <option value="7"selected>7</option>
+        </select>
+      </div>
+    </div>
+
+    <div style="margin-top:12px">
+      <button id="runBtn">Run analysis</button>
+      <span id="status" class="muted" style="margin-left:8px"></span>
+    </div>
+
+    <div id="result" style="margin-top:14px"></div>
+  </div>
+
+  <!-- Embedded report viewer -->
+  <div id="viewer" style="margin-top:16px">
+    <iframe id="reportFrame"
+            style="width:100%; height:70vh; border:1px solid #e5e7eb; border-radius:12px"
+            src="about:blank"></iframe>
+  </div>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const resEl    = document.getElementById('result');
+    const runBtn   = document.getElementById('runBtn');
+    const frameEl  = document.getElementById('reportFrame');
+
+    document.getElementById('forecast').addEventListener('change', syncPrompt);
+    document.getElementById('tickers').addEventListener('blur', syncPrompt);
+
+    function syncPrompt(){
+      const base = "Analyze {TICS} for the last 5 years and forecast the next {D} days. Include evaluation, explainability, risk, and produce an HTML report.";
+      const d = document.getElementById('forecast').value;
+      const t = (document.getElementById('tickers').value || "AAPL").trim();
+      document.getElementById('prompt').value = base.replace("{TICS}", t).replace("{D}", d);
+    }
+
+    async function pollStatus(run_id, timeoutMs=10*60*1000, intervalMs=3000){
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs){
+        try{
+          const r = await fetch(`/status/${encodeURIComponent(run_id)}`);
+          const s = await r.json();
+          if (s.ready) return s.report;
+        }catch(e){ /* ignore and keep polling */ }
+        await new Promise(res => setTimeout(res, intervalMs));
+      }
+      throw new Error("Timed out waiting for report.");
+    }
+
+    runBtn.onclick = async () => {
+      resEl.innerHTML = "";
+      frameEl.src = "about:blank";
+      statusEl.innerHTML = `<span class="spinner"></span>Submitting…`;
+      runBtn.disabled = true;
+
+      try {
+        const user_request = document.getElementById('prompt').value.trim();
+        const tickers = (document.getElementById('tickers').value || "")
+                        .split(/[,\s]+/).filter(Boolean);
+
+        const body = { user_request, report_out_name: "llm_report.html" };
+        if (tickers.length) body.tickers = tickers;
+
+
+        const r = await fetch("/run-nl-async", {
+          method: "POST",
+          headers: {"Content-Type":"application/json"},
+          body: JSON.stringify(body)
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.error || JSON.stringify(data));
+
+        const run_id = data.run_id || (data.run_base || "").split("/").pop();
+        if (!run_id) throw new Error("No run_id in response.");
+
+        statusEl.innerHTML = `<span class="spinner"></span>Working… generating report…`;
+
+        // Wait until the report exists, then display it
+        const reportUrl = await pollStatus(run_id);
+        resEl.innerHTML =
+          `<div><b class="ok">Done.</b> Report: <a class="link" href="${reportUrl}" target="_blank">${reportUrl}</a></div>`;
+        frameEl.src = reportUrl;
+
+        frameEl.scrollIntoView({behavior:"smooth", block:"start"});
+        statusEl.textContent = "";
+      } catch (err) {
+        statusEl.textContent = "";
+        resEl.innerHTML = `<div class="err">Error: ${err.message || err}</div>`;
+      } finally {
+        runBtn.disabled = false;
+      }
+    };
+  </script>
+</body>
+</html>
